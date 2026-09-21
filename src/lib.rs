@@ -35,7 +35,8 @@ pub extern "C" fn basalt_agent_metadata() -> u64 {
             "{model}".into(),
             "--effort".into(),
             "{variant}".into(),
-            "-p={prompt}".into(),
+            "--print".into(),
+            "[Workspace: .] MANDATORY: You must use the Basalt MCP tools (read_file, write_file, request_lease) for all file reads, edits, and leases. Do NOT use view_file or replace_file_content. When using run_command, always set Cwd to '.' so commands run in this workspace directory. User instruction: {prompt}".into(),
         ],
         resume_new_args: vec![
             "--output-format".into(),
@@ -45,7 +46,8 @@ pub extern "C" fn basalt_agent_metadata() -> u64 {
             "{model}".into(),
             "--effort".into(),
             "{variant}".into(),
-            "-p={prompt}".into(),
+            "--print".into(),
+            "[Workspace: .] MANDATORY: You must use the Basalt MCP tools (read_file, write_file, request_lease) for all file reads, edits, and leases. Do NOT use view_file or replace_file_content. When using run_command, always set Cwd to '.' so commands run in this workspace directory. User instruction: {prompt}".into(),
         ],
         resume_cont_args: vec![
             "--continue".into(),
@@ -56,7 +58,8 @@ pub extern "C" fn basalt_agent_metadata() -> u64 {
             "{model}".into(),
             "--effort".into(),
             "{variant}".into(),
-            "-p={prompt}".into(),
+            "--print".into(),
+            "[Workspace: .] MANDATORY: You must use the Basalt MCP tools (read_file, write_file, request_lease) for all file reads, edits, and leases. Do NOT use view_file or replace_file_content. When using run_command, always set Cwd to '.' so commands run in this workspace directory. User instruction: {prompt}".into(),
         ],
         execution_tier: AgentExecutionTier::MountedWorkspace,
         workspace_capabilities: vec!["mcp".into(), "shadow".into()],
@@ -87,27 +90,42 @@ pub extern "C" fn basalt_agent_settings_schema() -> u64 {
 /// Pure implementation of Google Antigravity launch preparation for testability and guest execution.
 pub fn prepare_antigravity_launch(req: &AgentLaunchRequest) -> AgentLaunchPreparation {
     let mut workspace_files = Vec::new();
+    let mut extra_args = Vec::new();
+
+    // If workspace_path is provided by the host, pass --gemini_dir with the absolute path to .gemini.
+    // This satisfies agy's requirement that gemini_dir must be an absolute path and prevents it from
+    // falling back to ~/.gemini/antigravity-cli.
+    if let Some(ref ws) = req.workspace_path {
+        let gemini_dir = std::path::Path::new(ws).join(".gemini");
+        extra_args.push("--gemini_dir".to_string());
+        extra_args.push(gemini_dir.to_string_lossy().to_string());
+    }
 
     // Model and effort/variant are handled via {model} and {variant} template placeholders
     // in the args declared by basalt_agent_metadata(). Do not add them here to avoid
     // double-injection (the core's substitute_template_args already substitutes them).
 
     // Build the .gemini/settings.json combining MCP server config and tool restrictions.
-    //
-    // Only the primary file I/O tools are disabled so that agy can still use
-    // directory listing and search for workspace/context detection, while being
-    // forced to use Basalt's MCP-provided tools for actual file reads and writes.
     let mut disabled_builtin_tools: Vec<&str> = Vec::new();
+    let mut deny_grants: Vec<String> = Vec::new();
     for tool in &req.disabled_tools {
         match tool {
             StandardTool::Read => {
-                // Re-enabled for agy so it can read local files and detect workspace context natively.
+                disabled_builtin_tools.push("read_file");
+                disabled_builtin_tools.push("view_file");
+                deny_grants.push(":read_file:*".to_string());
             }
             StandardTool::Write => {
                 disabled_builtin_tools.push("write_file");
+                disabled_builtin_tools.push("write_to_file");
+                disabled_builtin_tools.push("replace_file_content");
+                disabled_builtin_tools.push("multi_replace_file_content");
+                deny_grants.push(":write_file:*".to_string());
             }
             StandardTool::Execute => {
                 disabled_builtin_tools.push("run_shell_command");
+                disabled_builtin_tools.push("run_command");
+                deny_grants.push(":command:*".to_string());
             }
             StandardTool::Question => {
                 // agy has no built-in "question" tool to disable.
@@ -131,6 +149,10 @@ pub fn prepare_antigravity_launch(req: &AgentLaunchRequest) -> AgentLaunchPrepar
     // Disable built-in tools so the agent uses Basalt's MCP-provided tools instead.
     if !disabled_builtin_tools.is_empty() {
         settings["disabledBuiltinTools"] = serde_json::json!(disabled_builtin_tools);
+        settings["disabled_tools"] = serde_json::json!(disabled_builtin_tools);
+        settings["permissions"] = serde_json::json!({
+            "deny": deny_grants
+        });
     }
 
     // Only write the settings file if there is something to configure.
@@ -141,18 +163,71 @@ pub fn prepare_antigravity_launch(req: &AgentLaunchRequest) -> AgentLaunchPrepar
             relative_path: ".gemini/settings.json".to_string(),
             content: content.clone(),
         });
+        workspace_files.push(AgentWorkspaceFile {
+            relative_path: ".gemini/config/mcp_config.json".to_string(),
+            content: content.clone(),
+        });
+        workspace_files.push(AgentWorkspaceFile {
+            relative_path: ".gemini/antigravity-cli/settings.json".to_string(),
+            content: content.clone(),
+        });
 
         // Also write mcp_config.json as a fallback for older agy versions.
         if req.mcp_url.is_some() {
             workspace_files.push(AgentWorkspaceFile {
                 relative_path: "mcp_config.json".to_string(),
-                content,
+                content: content.clone(),
+            });
+        }
+
+        // Write project configuration so ApplyProjectPermissionGrants preserves denials
+        if !deny_grants.is_empty() {
+            let project_json = serde_json::json!({
+                "id": "default-cli-project",
+                "name": "CLI Project",
+                "permissionGrants": {
+                    "deny": deny_grants
+                },
+                "projectResources": {}
+            });
+            let project_content = serde_json::to_string_pretty(&project_json).unwrap_or_default();
+            workspace_files.push(AgentWorkspaceFile {
+                relative_path: ".gemini/config/projects/default-cli-project.json".to_string(),
+                content: project_content.clone(),
+            });
+            workspace_files.push(AgentWorkspaceFile {
+                relative_path: ".gemini/antigravity-cli/config/projects/default-cli-project.json".to_string(),
+                content: project_content,
             });
         }
     }
 
+    let rule_content = "\
+---
+trigger: always_on
+---
+# Workspace Instructions
+
+MANDATORY: You MUST use the Basalt MCP tools (`read_file`, `write_file`, `request_lease`) for all workspace file operations.
+Do NOT use built-in tools `view_file`, `replace_file_content`, `write_to_file`, or `multi_replace_file_content`.
+When running commands with `run_command`, always explicitly set `Cwd` to `.` (the current workspace directory) rather than omitting it, so commands execute in the workspace instead of the scratch directory.
+";
+
+    workspace_files.push(AgentWorkspaceFile {
+        relative_path: ".agents/rules/basalt.md".to_string(),
+        content: rule_content.to_string(),
+    });
+    workspace_files.push(AgentWorkspaceFile {
+        relative_path: "GEMINI.md".to_string(),
+        content: rule_content.to_string(),
+    });
+    workspace_files.push(AgentWorkspaceFile {
+        relative_path: "AGENTS.md".to_string(),
+        content: rule_content.to_string(),
+    });
+
     AgentLaunchPreparation {
-        extra_args: Vec::new(),
+        extra_args,
         env: std::collections::HashMap::new(),
         workspace_files,
     }
@@ -226,6 +301,8 @@ const STATE_NONE: u8 = 0;
 const STATE_MSG_OPEN: u8 = 1;
 const STATE_THOUGHT_OPEN: u8 = 2;
 
+static OPEN_TOOLS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
 /// Stateful parse: processes one JSON line and returns `(new_state, events)`.
 ///
 /// `open_entry` is the current state byte (`STATE_*`).
@@ -237,6 +314,9 @@ pub fn parse_antigravity_line_stateful(line_str: &str, open_entry: u8) -> (u8, V
 
         // 1. Session start / init
         if event_type == "init" || event_type == "session_start" {
+            if let Ok(mut set) = OPEN_TOOLS.lock() {
+                set.clear();
+            }
             if let Some(cid) = val.get("conversation_id")
                 .or_else(|| val.get("session_id"))
                 .or_else(|| val.get("sessionId"))
@@ -260,10 +340,16 @@ pub fn parse_antigravity_line_stateful(line_str: &str, open_entry: u8) -> (u8, V
                         .and_then(|t| t.as_str())
                         .unwrap_or("tool");
 
+                    let step_idx_str = step.get("step_index")
+                        .and_then(|i| i.as_i64().or_else(|| i.as_u64().map(|u| u as i64)))
+                        .map(|i| format!("step-{}", i));
+
                     let call_id = step.get("call_id")
                         .or_else(|| step.get("id"))
                         .and_then(|i| i.as_str())
-                        .unwrap_or(tool_name);
+                        .map(|s| s.to_string())
+                        .or(step_idx_str)
+                        .unwrap_or_else(|| tool_name.to_string());
 
                     let tool_info = step.get("tool_info");
                     let params = tool_info
@@ -271,27 +357,75 @@ pub fn parse_antigravity_line_stateful(line_str: &str, open_entry: u8) -> (u8, V
                         .or_else(|| step.get("parameters"))
                         .or_else(|| step.get("args"));
 
-                    let raw_cmd = params.map(|p| p.to_string()).unwrap_or_default();
+                    // When tool is call_mcp_tool, unwrap inner ToolName and Arguments
+                    let mcp_tool_name = params
+                        .and_then(|p| p.get("ToolName").or_else(|| p.get("tool_name")).or_else(|| p.get("tool")))
+                        .and_then(|t| t.as_str());
+
+                    let display_tool_name = if let Some(mcp_tool) = mcp_tool_name {
+                        mcp_tool
+                    } else {
+                        tool_name
+                    };
+
+                    let actual_command = if let Some(p) = params {
+                        let args_obj = p.get("Arguments").or_else(|| p.get("arguments")).unwrap_or(p);
+                        args_obj.get("CommandLine")
+                            .or_else(|| args_obj.get("command_line"))
+                            .or_else(|| args_obj.get("command"))
+                            .or_else(|| args_obj.get("cmd"))
+                            .or_else(|| args_obj.get("script"))
+                            .and_then(|c| c.as_str())
+                    } else {
+                        None
+                    };
+
+                    let entry_tool_name = if (display_tool_name == "run_command"
+                        || display_tool_name == "run_shell_command"
+                        || display_tool_name == "bash"
+                        || display_tool_name == "exec"
+                        || display_tool_name == "run")
+                        && actual_command.map_or(false, |c| !c.trim().is_empty())
+                    {
+                        actual_command.unwrap().to_string()
+                    } else {
+                        display_tool_name.to_string()
+                    };
+
+                    let raw_cmd = if let Some(args) = params.and_then(|p| p.get("Arguments").or_else(|| p.get("arguments"))) {
+                        args.to_string()
+                    } else {
+                        params.map(|p| p.to_string()).unwrap_or_default()
+                    };
 
                     let mut file_paths = Vec::new();
                     if let Some(p) = params {
-                        if let Some(path) = p.get("filePath")
-                            .or_else(|| p.get("path"))
-                            .or_else(|| p.get("file_path"))
-                            .or_else(|| p.get("file"))
-                            .or_else(|| p.get("target_file"))
-                            .or_else(|| p.get("TargetFile"))
+                        let args_obj = p.get("Arguments").or_else(|| p.get("arguments")).unwrap_or(p);
+                        if let Some(path) = args_obj.get("filePath")
+                            .or_else(|| args_obj.get("path"))
+                            .or_else(|| args_obj.get("file_path"))
+                            .or_else(|| args_obj.get("file"))
+                            .or_else(|| args_obj.get("target_file"))
+                            .or_else(|| args_obj.get("TargetFile"))
                             .and_then(|p| p.as_str())
                         {
                             file_paths.push(path.to_string());
                         }
                     }
 
-                    let lower = tool_name.to_lowercase();
+                    let lower = display_tool_name.to_lowercase();
                     let category = if lower.contains("read") || lower.contains("view") {
                         "read"
-                    } else if lower.contains("write") || lower.contains("edit") || lower.contains("replace") {
+                    } else if lower.contains("write") || lower.contains("edit") || lower.contains("replace") || lower.contains("lease") {
                         "write"
+                    } else if lower.contains("test") {
+                        "test"
+                    } else if lower.contains("build") || lower.contains("compile") {
+                        "build"
+                    } else if lower.contains("git") {
+                        "git"
+                    } else if lower.contains("search") || lower.contains("grep") || lower.contains("find") {
+                        "search"
                     } else if lower.contains("run") || lower.contains("bash") || lower.contains("exec") || lower.contains("command") {
                         "run"
                     } else if lower.contains("ask") || lower.contains("question") {
@@ -308,21 +442,45 @@ pub fn parse_antigravity_line_stateful(line_str: &str, open_entry: u8) -> (u8, V
                     let output_str = output_val.and_then(|o| o.as_str());
 
                     if state == "ACTIVE" || state == "active" || state == "running" {
-                        events.push(AgentEvent::NewEntry {
-                            vendor_id: call_id.to_string(),
-                            tool: tool_name.to_string(),
-                            category: category.to_string(),
-                            raw_cmd,
-                            file_paths,
-                        });
+                        let is_new = {
+                            let mut open = OPEN_TOOLS.lock().unwrap_or_else(|e| e.into_inner());
+                            if !open.contains(&call_id) {
+                                open.push(call_id.clone());
+                                true
+                            } else {
+                                false
+                            }
+                        };
+
+                        if is_new {
+                            events.push(AgentEvent::NewEntry {
+                                vendor_id: call_id,
+                                tool: entry_tool_name.clone(),
+                                category: category.to_string(),
+                                raw_cmd,
+                                file_paths,
+                            });
+                        }
                     } else if state == "DONE" || state == "done" || state == "completed" || state == "success" || output_str.is_some() {
-                        events.push(AgentEvent::NewEntry {
-                            vendor_id: call_id.to_string(),
-                            tool: tool_name.to_string(),
-                            category: category.to_string(),
-                            raw_cmd,
-                            file_paths,
-                        });
+                        let was_open = {
+                            let mut open = OPEN_TOOLS.lock().unwrap_or_else(|e| e.into_inner());
+                            if let Some(pos) = open.iter().position(|x| x == &call_id) {
+                                open.swap_remove(pos);
+                                true
+                            } else {
+                                false
+                            }
+                        };
+
+                        if !was_open {
+                            events.push(AgentEvent::NewEntry {
+                                vendor_id: call_id.clone(),
+                                tool: entry_tool_name,
+                                category: category.to_string(),
+                                raw_cmd,
+                                file_paths,
+                            });
+                        }
 
                         let exit_code = step.get("exit_code")
                             .or_else(|| tool_info.and_then(|ti| ti.get("exit_code")))
@@ -335,7 +493,7 @@ pub fn parse_antigravity_line_stateful(line_str: &str, open_entry: u8) -> (u8, V
                         }
 
                         events.push(AgentEvent::CloseEntry {
-                            vendor_id: call_id.to_string(),
+                            vendor_id: call_id,
                             exit_code,
                             output_lines: lines,
                         });
@@ -557,6 +715,60 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_antigravity_tool_categories() {
+        let test_json = r#"{"event":"step_update","step_update":{"step_type":"tool","state":"DONE","tool_name":"run_cargo_test","call_id":"c4","tool_info":{"output":"test ok"}}}"#;
+        let evs = parse_antigravity_json_line(test_json);
+        match &evs[0] {
+            AgentEvent::NewEntry { tool, category, .. } => {
+                assert_eq!(tool, "run_cargo_test");
+                assert_eq!(category, "test");
+            }
+            _ => panic!("expected NewEntry for run_cargo_test"),
+        }
+
+        let git_json = r#"{"event":"step_update","step_update":{"step_type":"tool","state":"DONE","tool_name":"git_status","call_id":"c5","tool_info":{"output":"clean"}}}"#;
+        let evs2 = parse_antigravity_json_line(git_json);
+        match &evs2[0] {
+            AgentEvent::NewEntry { tool, category, .. } => {
+                assert_eq!(tool, "git_status");
+                assert_eq!(category, "git");
+            }
+            _ => panic!("expected NewEntry for git_status"),
+        }
+    }
+
+    #[test]
+    fn test_parse_antigravity_two_phase_tool_call() {
+        if let Ok(mut set) = OPEN_TOOLS.lock() {
+            set.clear();
+        }
+        let active_json = r#"{"event":"step_update","step_update":{"step_index":2,"step_type":"tool","state":"ACTIVE","tool_name":"call_mcp_tool","tool_info":{"parameters":{"ServerName":"basalt","ToolName":"write_file","Arguments":{"path":"README.md","content":"test"}}}}}"#;
+        let evs1 = parse_antigravity_json_line(active_json);
+        assert_eq!(evs1.len(), 1);
+        match &evs1[0] {
+            AgentEvent::NewEntry { vendor_id, tool, category, file_paths, .. } => {
+                assert_eq!(vendor_id, "step-2");
+                assert_eq!(tool, "write_file");
+                assert_eq!(category, "write");
+                assert_eq!(file_paths, &vec!["README.md".to_string()]);
+            }
+            _ => panic!("expected NewEntry"),
+        }
+
+        let done_json = r#"{"event":"step_update","step_update":{"step_index":2,"step_type":"tool","state":"DONE","tool_name":"call_mcp_tool","tool_info":{"parameters":{"ServerName":"basalt","ToolName":"write_file","Arguments":{"path":"README.md","content":"test"}},"output":"Success"}}}"#;
+        let evs2 = parse_antigravity_json_line(done_json);
+        assert_eq!(evs2.len(), 1);
+        match &evs2[0] {
+            AgentEvent::CloseEntry { vendor_id, exit_code, output_lines } => {
+                assert_eq!(vendor_id, "step-2");
+                assert_eq!(*exit_code, 0);
+                assert_eq!(output_lines, &vec!["Success".to_string()]);
+            }
+            _ => panic!("expected CloseEntry"),
+        }
+    }
+
+    #[test]
     fn test_parse_antigravity_agent_response() {
         let msg_json = r#"{"event":"step_update","step_update":{"step_type":"agent_response","text_delta":"Hello from Antigravity!"}}"#;
         let evs = parse_antigravity_json_line(msg_json);
@@ -578,15 +790,19 @@ mod tests {
             disabled_tools: vec![],
             model: Some("gemini-3.8-flash-high".into()),
             variant: Some("high".into()),
+            workspace_path: None,
         };
 
         let prep = prepare_antigravity_launch(&req);
-        // Model and effort are now handled via {model}/{variant} template placeholders,
-        // not via extra_args, so extra_args should be empty.
         assert!(prep.extra_args.is_empty());
-        assert_eq!(prep.workspace_files.len(), 2);
+        assert_eq!(prep.workspace_files.len(), 7);
         assert_eq!(prep.workspace_files[0].relative_path, ".gemini/settings.json");
-        assert_eq!(prep.workspace_files[1].relative_path, "mcp_config.json");
+        assert_eq!(prep.workspace_files[1].relative_path, ".gemini/config/mcp_config.json");
+        assert_eq!(prep.workspace_files[2].relative_path, ".gemini/antigravity-cli/settings.json");
+        assert_eq!(prep.workspace_files[3].relative_path, "mcp_config.json");
+        assert_eq!(prep.workspace_files[4].relative_path, ".agents/rules/basalt.md");
+        assert_eq!(prep.workspace_files[5].relative_path, "GEMINI.md");
+        assert_eq!(prep.workspace_files[6].relative_path, "AGENTS.md");
 
         let json_val: serde_json::Value = serde_json::from_str(&prep.workspace_files[0].content).unwrap();
         assert_eq!(json_val["mcpServers"]["basalt"]["serverUrl"], "http://127.0.0.1:9090");
@@ -599,13 +815,57 @@ mod tests {
             disabled_tools: vec![StandardTool::Read, StandardTool::Write],
             model: None,
             variant: None,
+            workspace_path: None,
         };
 
         let prep2 = prepare_antigravity_launch(&req2);
+        assert_eq!(prep2.workspace_files.len(), 9);
         let json2: serde_json::Value = serde_json::from_str(&prep2.workspace_files[0].content).unwrap();
         let disabled = json2["disabledBuiltinTools"].as_array().expect("disabledBuiltinTools should be array");
-        assert!(!disabled.iter().any(|v| v == "read_file"), "read_file should be enabled");
+        assert!(disabled.iter().any(|v| v == "read_file"), "read_file should be disabled");
+        assert!(disabled.iter().any(|v| v == "view_file"), "view_file should be disabled");
         assert!(disabled.iter().any(|v| v == "write_file"), "write_file should be disabled");
-        assert_eq!(disabled.len(), 1);
+        assert!(disabled.iter().any(|v| v == "write_to_file"), "write_to_file should be disabled");
+        assert!(disabled.iter().any(|v| v == "replace_file_content"), "replace_file_content should be disabled");
+        assert!(disabled.iter().any(|v| v == "multi_replace_file_content"), "multi_replace_file_content should be disabled");
+        assert_eq!(disabled.len(), 6);
+
+        let deny = json2["permissions"]["deny"].as_array().expect("permissions.deny should be array");
+        assert!(deny.iter().any(|v| v == ":read_file:*"));
+        assert!(deny.iter().any(|v| v == ":write_file:*"));
+
+        // Check project json
+        let proj: serde_json::Value = serde_json::from_str(&prep2.workspace_files[4].content).unwrap();
+        assert_eq!(proj["id"], "default-cli-project");
+        let proj_deny = proj["permissionGrants"]["deny"].as_array().unwrap();
+        assert!(proj_deny.iter().any(|v| v == ":read_file:*"));
+
+        // 3. With workspace_path provided → generates --gemini_dir absolute path
+        let req3 = AgentLaunchRequest {
+            mcp_url: None,
+            disabled_tools: vec![],
+            model: None,
+            variant: None,
+            workspace_path: Some("C:\\repos\\myproject".into()),
+        };
+
+        let prep3 = prepare_antigravity_launch(&req3);
+        assert_eq!(prep3.extra_args.len(), 2);
+        assert_eq!(prep3.extra_args[0], "--gemini_dir");
+        #[cfg(target_os = "windows")]
+        assert_eq!(prep3.extra_args[1], "C:\\repos\\myproject\\.gemini");
+    }
+
+    #[test]
+    fn test_parse_antigravity_run_command_actual_cmd() {
+        let json = r#"{"event":"step_update","step_update":{"step_type":"tool","state":"DONE","tool_name":"call_mcp_tool","call_id":"c6","tool_info":{"parameters":{"ServerName":"basalt","ToolName":"run_command","Arguments":{"CommandLine":"cargo check --workspace","Cwd":"."}},"output":"Finished"}}}"#;
+        let evs = parse_antigravity_json_line(json);
+        match &evs[0] {
+            AgentEvent::NewEntry { tool, category, .. } => {
+                assert_eq!(tool, "cargo check --workspace");
+                assert_eq!(category, "run");
+            }
+            _ => panic!("expected NewEntry for run_command with actual command string"),
+        }
     }
 }
