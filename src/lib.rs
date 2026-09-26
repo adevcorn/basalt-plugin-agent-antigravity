@@ -414,13 +414,17 @@ pub fn parse_antigravity_line_stateful(line_str: &str, open_entry: u8) -> (u8, V
                     }
 
                     let lower = display_tool_name.to_lowercase();
-                    let category = if lower.contains("read") || lower.contains("view") {
+                    let category = if lower.contains("query_peer") || lower.contains("peer_symbol") || lower.contains("peer_file") {
+                        "peer"
+                    } else if lower == "task" || lower.contains("subagent") || lower.contains("delegate") {
+                        "task"
+                    } else if lower.contains("read") || lower.contains("view") {
                         "read"
                     } else if lower.contains("write") || lower.contains("edit") || lower.contains("replace") || lower.contains("lease") {
                         "write"
                     } else if lower.contains("test") {
                         "test"
-                    } else if lower.contains("build") || lower.contains("compile") {
+                    } else if lower.contains("build") || lower.contains("compile") || lower.contains("check") {
                         "build"
                     } else if lower.contains("git") {
                         "git"
@@ -734,6 +738,26 @@ mod tests {
                 assert_eq!(category, "git");
             }
             _ => panic!("expected NewEntry for git_status"),
+        }
+
+        let check_json = r#"{"event":"step_update","step_update":{"step_type":"tool","state":"DONE","tool_name":"basalt_check","call_id":"c6","tool_info":{"output":"clean"}}}"#;
+        let evs3 = parse_antigravity_json_line(check_json);
+        match &evs3[0] {
+            AgentEvent::NewEntry { tool, category, .. } => {
+                assert_eq!(tool, "basalt_check");
+                assert_eq!(category, "build");
+            }
+            _ => panic!("expected NewEntry for basalt_check"),
+        }
+
+        let peer_json = r#"{"event":"step_update","step_update":{"step_type":"tool","state":"DONE","tool_name":"query_peer_symbol","call_id":"c7","tool_info":{"output":"ok"}}}"#;
+        let evs4 = parse_antigravity_json_line(peer_json);
+        match &evs4[0] {
+            AgentEvent::NewEntry { tool, category, .. } => {
+                assert_eq!(tool, "query_peer_symbol");
+                assert_eq!(category, "peer");
+            }
+            _ => panic!("expected NewEntry for query_peer_symbol"),
         }
     }
 
