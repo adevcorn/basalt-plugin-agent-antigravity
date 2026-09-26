@@ -36,7 +36,7 @@ pub extern "C" fn basalt_agent_metadata() -> u64 {
             "--effort".into(),
             "{variant}".into(),
             "--print".into(),
-            "[Workspace: .] MANDATORY: You must use the Basalt MCP tools (read_file, write_file, request_lease) for all file reads, edits, and leases. Do NOT use view_file or replace_file_content. When using run_command, always set Cwd to '.' so commands run in this workspace directory. User instruction: {prompt}".into(),
+            "[Workspace: .] MANDATORY: You must use the Basalt MCP tools (`read_file`, `write_file`, `get_file_outline`, `check` / `basalt_check`, `test` / `basalt_test`) for all workspace reads, edits, compiler checks, and tests. Do NOT use built-in view_file, replace_file_content, or raw shell check/test commands. When using run_command, set Cwd to '.' so commands run in this workspace directory. User instruction: {prompt}".into(),
         ],
         resume_new_args: vec![
             "--output-format".into(),
@@ -47,7 +47,7 @@ pub extern "C" fn basalt_agent_metadata() -> u64 {
             "--effort".into(),
             "{variant}".into(),
             "--print".into(),
-            "[Workspace: .] MANDATORY: You must use the Basalt MCP tools (read_file, write_file, request_lease) for all file reads, edits, and leases. Do NOT use view_file or replace_file_content. When using run_command, always set Cwd to '.' so commands run in this workspace directory. User instruction: {prompt}".into(),
+            "[Workspace: .] MANDATORY: You must use the Basalt MCP tools (`read_file`, `write_file`, `get_file_outline`, `check` / `basalt_check`, `test` / `basalt_test`) for all workspace reads, edits, compiler checks, and tests. Do NOT use built-in view_file, replace_file_content, or raw shell check/test commands. When using run_command, set Cwd to '.' so commands run in this workspace directory. User instruction: {prompt}".into(),
         ],
         resume_cont_args: vec![
             "--continue".into(),
@@ -59,7 +59,7 @@ pub extern "C" fn basalt_agent_metadata() -> u64 {
             "--effort".into(),
             "{variant}".into(),
             "--print".into(),
-            "[Workspace: .] MANDATORY: You must use the Basalt MCP tools (read_file, write_file, request_lease) for all file reads, edits, and leases. Do NOT use view_file or replace_file_content. When using run_command, always set Cwd to '.' so commands run in this workspace directory. User instruction: {prompt}".into(),
+            "[Workspace: .] MANDATORY: You must use the Basalt MCP tools (`read_file`, `write_file`, `get_file_outline`, `check` / `basalt_check`, `test` / `basalt_test`) for all workspace reads, edits, compiler checks, and tests. Do NOT use built-in view_file, replace_file_content, or raw shell check/test commands. When using run_command, set Cwd to '.' so commands run in this workspace directory. User instruction: {prompt}".into(),
         ],
         execution_tier: AgentExecutionTier::MountedWorkspace,
         workspace_capabilities: vec!["mcp".into(), "shadow".into()],
@@ -208,8 +208,9 @@ trigger: always_on
 ---
 # Workspace Instructions
 
-MANDATORY: You MUST use the Basalt MCP tools (`read_file`, `write_file`, `request_lease`) for all workspace file operations.
+MANDATORY: You MUST use the Basalt MCP tools (`read_file`, `write_file`, `get_file_outline`, `check` / `basalt_check`, `test` / `basalt_test`) for all workspace operations.
 Do NOT use built-in tools `view_file`, `replace_file_content`, `write_to_file`, or `multi_replace_file_content`.
+Do NOT run raw shell `cargo check`, `cargo test`, `dotnet build`, or `dotnet test` commands when `check` / `basalt_check` and `test` / `basalt_test` MCP tools are available.
 When running commands with `run_command`, always explicitly set `Cwd` to `.` (the current workspace directory) rather than omitting it, so commands execute in the workspace instead of the scratch directory.
 ";
 
