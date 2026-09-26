@@ -3,14 +3,9 @@
 version = 4
 
 [[package]]
-name = "basalt-host-shims"
-version = "0.1.0"
-
-[[package]]
 name = "basalt-plugin-antigravity"
 version = "0.1.0"
 dependencies = [
- "basalt-host-shims",
  "basalt-plugin-sdk",
  "serde",
  "serde_json",
@@ -19,6 +14,7 @@ dependencies = [
 [[package]]
 name = "basalt-plugin-sdk"
 version = "0.1.1"
+source = "git+https://github.com/adevcorn/basalt-plugin-sdk?tag=v0.1.1#097b3813445645df4afc304eec7aae0688665eed"
 dependencies = [
  "basalt-plugin-sdk-macros",
  "bincode",
@@ -28,6 +24,7 @@ dependencies = [
 [[package]]
 name = "basalt-plugin-sdk-macros"
 version = "0.1.0"
+source = "git+https://github.com/adevcorn/basalt-plugin-sdk?tag=v0.1.1#097b3813445645df4afc304eec7aae0688665eed"
 dependencies = [
  "proc-macro2",
  "quote",
