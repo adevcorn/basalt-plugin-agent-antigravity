@@ -5,7 +5,6 @@
 //! automatic MCP server wiring via `.gemini/settings.json`, and structured stream-json event parsing.
 
 use basalt_plugin_sdk::prelude::*;
-use basalt_host_shims as _;
 
 pub const PLUGIN_NAME: &str = "antigravity";
 pub const PLUGIN_VERSION: &str = "0.1.0";
