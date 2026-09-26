@@ -26,8 +26,11 @@ jobs:
         run: |
           WASM=$(ls target/wasm32-unknown-unknown/release/*.wasm | head -1)
           cp "$WASM" antigravity_agent.wasm
+          cp "$WASM" antigravity.wasm
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: antigravity_agent.wasm
+          files: |
+            antigravity_agent.wasm
+            antigravity.wasm
