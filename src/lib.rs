@@ -61,6 +61,14 @@ pub extern "C" fn basalt_agent_metadata() -> u64 {
             "[Workspace: .] MANDATORY: You must use the Basalt MCP tools (`read_file`, `write_file`, `get_file_outline`, `check` / `basalt_check`, `test` / `basalt_test`) for all workspace reads, edits, compiler checks, and tests. Do NOT use built-in view_file, replace_file_content, or raw shell check/test commands. When using run_command, set Cwd to '.' so commands run in this workspace directory. User instruction: {prompt}".into(),
         ],
         execution_tier: AgentExecutionTier::MountedWorkspace,
+        // NOTE: no `mask:gemini:*` declarations on purpose. The host can only
+        // enforce masks on MCP tools (tools/list filtering) and opencode
+        // harness permissions today; antigravity's native tools (view_file,
+        // run_command) have no per-tool config surface the host can render.
+        // Declaring them would be dead policy implying nonexistent
+        // enforcement. Revisit when a config surface is mapped; the real
+        // lever here is the CLI permission posture (`--sandbox` vs
+        // `--dangerously-skip-permissions` in the args above).
         workspace_capabilities: vec!["mcp".into(), "shadow".into()],
         protocol: AgentProtocol::Cli,
     };
